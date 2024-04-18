@@ -75,7 +75,8 @@ async fn service_handler(Path(service_name): Path<String>, body: String) -> impl
     let output = command.wait_with_output().await.unwrap();
 
     // let output_string_slice = String::from_utf8_lossy(&output.stdout).as_ref();
-    let output_string = String::from(String::from_utf8_lossy(&output.stdout).as_ref());
+    // let output_string = String::from(String::from_utf8_lossy(&output.stdout).as_ref());
+    let output_string = String::from(String::from_utf8(output.stdout).unwrap());
     println!("Output from git: {}", output_string);
     output_string
 }
