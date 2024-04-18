@@ -1,11 +1,11 @@
-use std::{io::{stdin, Read}, process::Stdio};
-use tokio::io::AsyncWriteExt;
-
 // Basic git server implementation
 // Each repo needs these APIs
 // GIT_REPO_URL/info/refs (GET)
 // GIT_REPO_URL/git-receive-pack (POST)
 // GIT_REPO_URL/git-upload-pack (POST)
+use std::{io::{stdin, Read}, process::Stdio};
+use tokio::io::AsyncWriteExt;
+
 use axum::{
     body::Bytes, extract::{
         Path,
@@ -70,13 +70,16 @@ async fn service_handler(Path(service_name): Path<String>, body: String) -> impl
         .stdout(Stdio::piped())
         .spawn().ok().unwrap();
     command.stdin.as_mut().unwrap().write_all(body.as_bytes()).await.unwrap();
-    // Close stdin to finish and avoid indefinite blocking
-    // drop(child_stdin);
-    let output = command.wait_with_output().await.unwrap();
 
-    // let output_string_slice = String::from_utf8_lossy(&output.stdout).as_ref();
+    let output = command.wait_with_output().await.unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut response = String::new();
+    response.push_str(&stdout);
+    println!("{}", response);
+    response
+
     // let output_string = String::from(String::from_utf8_lossy(&output.stdout).as_ref());
-    let output_string = String::from(String::from_utf8(output.stdout).unwrap());
-    println!("Output from git: {}", output_string);
-    output_string
+    // let output_string = String::from(String::from_utf8(output.stdout).unwrap());
+    // println!("Output from git: {}", output_string);
+    // output_string
 }
