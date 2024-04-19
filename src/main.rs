@@ -59,7 +59,7 @@ async fn service_handler(Path(service_name): Path<String>, body: String) -> impl
     match service_name.as_str() {
         "git-receive-pack" | "git-upload-pack" => (),
         // implement a 404
-        _ => return String::from("nope"),
+        _ => return (StatusCode::NOT_FOUND, HeaderMap::new(), b"Not found".to_vec()),
     };
     println!("Action to execute: {}", &service_name.as_str()[4..]);
     let mut command = Command::new("git")
@@ -72,14 +72,12 @@ async fn service_handler(Path(service_name): Path<String>, body: String) -> impl
     command.stdin.as_mut().unwrap().write_all(body.as_bytes()).await.unwrap();
 
     let output = command.wait_with_output().await.unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut response = String::new();
-    response.push_str(&stdout);
-    println!("{}", response);
-    response
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        format!("application/x-git-{}-result",&service_name.as_str()[4..]).parse().unwrap(),
+    );
 
-    // let output_string = String::from(String::from_utf8_lossy(&output.stdout).as_ref());
-    // let output_string = String::from(String::from_utf8(output.stdout).unwrap());
-    // println!("Output from git: {}", output_string);
-    // output_string
+    (StatusCode::OK ,headers, output.stdout)
+
 }
