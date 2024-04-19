@@ -5,6 +5,7 @@
 // GIT_REPO_URL/git-upload-pack (POST)
 use std::{io::{stdin, Read}, process::Stdio};
 use tokio::io::AsyncWriteExt;
+use serde::Deserialize;
 
 use axum::{
     body::Bytes, extract::{
@@ -30,9 +31,17 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
-async fn info_refs_handler() -> impl IntoResponse {
+#[derive(Deserialize)]
+struct InfoRefQueryParam {
+    service: String,
+}
+
+async fn info_refs_handler(q: Query<InfoRefQueryParam>) -> impl IntoResponse {
+    let InfoRefQueryParam {service } = q.0;
+    let service_name = &service.to_string()[4..];
+    println!("INFO REFS CALLED {}", service);
     let mut command = Command::new("git")
-        .arg("upload-pack")
+        .arg(service_name)
         .arg("--stateless-rpc")
         .arg("--advertise-refs")
         .arg(".")
@@ -43,15 +52,18 @@ async fn info_refs_handler() -> impl IntoResponse {
     let stdout = String::from_utf8_lossy(&command.stdout);
 
     let mut response = String::new();
-    response.push_str("001e# service=git-upload-pack\n0000");
+    // response.push_str("001e# service=git-upload-pack\n0000");
+    response.push_str(&format!("001e# service=git-{}\n0000", service_name));
     response.push_str(&stdout);
 
     let mut headers = HeaderMap::new();
     headers.insert(
         header::CONTENT_TYPE,
-        "application/x-git-upload-pack-advertisement".parse().unwrap(),
+        // "application/x-git-upload-pack-advertisement".parse().unwrap(),
+        format!("application/x-git-{}-advertisement", service_name).parse().unwrap(),
     );
 
+    println!("{}", response);
     (headers, response)
 }
 
@@ -61,7 +73,7 @@ async fn service_handler(Path(service_name): Path<String>, body: String) -> impl
         // implement a 404
         _ => return (StatusCode::NOT_FOUND, HeaderMap::new(), b"Not found".to_vec()),
     };
-    println!("Action to execute: {}", &service_name.as_str()[4..]);
+    println!("SERVICE CALLED: {}", &service_name.as_str()[4..]);
     let mut command = Command::new("git")
         .arg(&service_name[4..])
         .arg("--stateless-rpc")
