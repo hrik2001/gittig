@@ -1,6 +1,6 @@
 // Basic git server implementation
 // Each repo needs these APIs
-// GIT_REPO_URL/info/refs (GET)
+// GIT_REPO_URL/info/refs?service= (GET)
 // GIT_REPO_URL/git-receive-pack (POST)
 // GIT_REPO_URL/git-upload-pack (POST)
 use std::{io::{stdin, Read}, process::Stdio};
@@ -17,16 +17,25 @@ use axum::{
     }, Router
 };
 use tokio::process::Command;
+use std::net::SocketAddr;
+use tower_http::trace::TraceLayer;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() {
     println!("Gittig server initialized");
 
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
+
     let app = Router::new()
         .route("/", get(|| async {"hello world"}))
         .route("/repo.git", get(|| async {"hello world"}))
         .route("/repo.git/:service_name", post(service_handler))
-        .route("/repo.git/info/refs", get(info_refs_handler));
+        .route("/repo.git/info/refs", get(info_refs_handler))
+        .layer(TraceLayer::new_for_http());
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
@@ -37,9 +46,17 @@ struct InfoRefQueryParam {
 }
 
 async fn info_refs_handler(q: Query<InfoRefQueryParam>) -> impl IntoResponse {
-    let InfoRefQueryParam {service } = q.0;
-    let service_name = &service.to_string()[4..];
+    let InfoRefQueryParam { service } = q.0;
+    let service_name = &service.to_string()[4..];  // strip the 'git-' prefix
+    let mut hex_length = String::new();
+    match service_name {
+        "receive-pack" => hex_length.push_str("001f"),
+        "upload-pack" => hex_length.push_str("001e"),
+        // implement a 404
+        _ => return (StatusCode::NOT_FOUND, HeaderMap::new(), "Not found".to_string()),
+    };
     println!("INFO REFS CALLED {}", service);
+    
     let mut command = Command::new("git")
         .arg(service_name)
         .arg("--stateless-rpc")
@@ -51,23 +68,21 @@ async fn info_refs_handler(q: Query<InfoRefQueryParam>) -> impl IntoResponse {
 
     let stdout = String::from_utf8_lossy(&command.stdout);
 
-    let mut response = String::new();
-    // response.push_str("001e# service=git-upload-pack\n0000");
-    response.push_str(&format!("001e# service=git-{}\n0000", service_name));
-    response.push_str(&stdout);
+    let response_content = format!("# service=git-{}\n0000", service_name);
+
+    let response = format!("{}{}{}", hex_length, response_content, stdout);
 
     let mut headers = HeaderMap::new();
     headers.insert(
         header::CONTENT_TYPE,
-        // "application/x-git-upload-pack-advertisement".parse().unwrap(),
         format!("application/x-git-{}-advertisement", service_name).parse().unwrap(),
     );
 
     println!("{}", response);
-    (headers, response)
+    (StatusCode::OK, headers, response)
 }
 
-async fn service_handler(Path(service_name): Path<String>, body: String) -> impl IntoResponse {
+async fn service_handler(Path(service_name): Path<String>, body: Bytes) -> impl IntoResponse {
     match service_name.as_str() {
         "git-receive-pack" | "git-upload-pack" => (),
         // implement a 404
@@ -81,7 +96,7 @@ async fn service_handler(Path(service_name): Path<String>, body: String) -> impl
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn().ok().unwrap();
-    command.stdin.as_mut().unwrap().write_all(body.as_bytes()).await.unwrap();
+    command.stdin.as_mut().unwrap().write_all(&body).await.unwrap();
 
     let output = command.wait_with_output().await.unwrap();
     let mut headers = HeaderMap::new();
