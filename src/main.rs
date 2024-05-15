@@ -12,14 +12,14 @@ use axum::{
         Path,
         Query, Request
     }, http::{header, HeaderMap, StatusCode}, response::IntoResponse, routing::{
-        get,
-        post
+        get, head, post
     }, Router
 };
 use tokio::process::Command;
 use std::net::SocketAddr;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 #[tokio::main]
 async fn main() {
@@ -45,7 +45,7 @@ struct InfoRefQueryParam {
     service: String,
 }
 
-async fn info_refs_handler(q: Query<InfoRefQueryParam>) -> impl IntoResponse {
+async fn info_refs_handler(headers: HeaderMap, q: Query<InfoRefQueryParam>) -> impl IntoResponse {
     let InfoRefQueryParam { service } = q.0;
     let service_name = &service.to_string()[4..];  // strip the 'git-' prefix
     let mut hex_length = String::new();
@@ -55,9 +55,28 @@ async fn info_refs_handler(q: Query<InfoRefQueryParam>) -> impl IntoResponse {
         // implement a 404
         _ => return (StatusCode::NOT_FOUND, HeaderMap::new(), "Not found".to_string()),
     };
-    println!("INFO REFS CALLED {}", service);
+
+    if !headers.contains_key("authorization") {
+        let mut challenge_headers = HeaderMap::new();
+        challenge_headers.insert(header::WWW_AUTHENTICATE, "Basic realm=\"Git Server\"".parse().unwrap());
+        return (StatusCode::UNAUTHORIZED, challenge_headers, "Authentication required".to_string());
+    }
+    let encoded_token = headers["authorization"].clone().to_str().unwrap().to_string();
+
+    if !encoded_token.starts_with("Basic") {
+        // Making sure that Basic auth is followed
+        let mut challenge_headers = HeaderMap::new();
+        challenge_headers.insert(header::WWW_AUTHENTICATE, "Basic realm=\"Git Server\"".parse().unwrap());
+        return (StatusCode::UNAUTHORIZED, challenge_headers, "Authentication required".to_string());
+    }
+    let encoded_part = &encoded_token[6..];
+    let decoded_token_vector = &STANDARD.decode(encoded_part).unwrap();
+    let token = String::from_utf8_lossy(decoded_token_vector);
+    let mut split_creds = token.split(':');
+    let username = split_creds.next().unwrap();
+    let password = split_creds.next().unwrap();
     
-    let mut command = Command::new("git")
+    let command = Command::new("git")
         .arg(service_name)
         .arg("--stateless-rpc")
         .arg("--advertise-refs")
@@ -78,7 +97,6 @@ async fn info_refs_handler(q: Query<InfoRefQueryParam>) -> impl IntoResponse {
         format!("application/x-git-{}-advertisement", service_name).parse().unwrap(),
     );
 
-    println!("{}", response);
     (StatusCode::OK, headers, response)
 }
 
@@ -88,7 +106,6 @@ async fn service_handler(Path(service_name): Path<String>, body: Bytes) -> impl 
         // implement a 404
         _ => return (StatusCode::NOT_FOUND, HeaderMap::new(), b"Not found".to_vec()),
     };
-    println!("SERVICE CALLED: {}", &service_name.as_str()[4..]);
     let mut command = Command::new("git")
         .arg(&service_name[4..])
         .arg("--stateless-rpc")
